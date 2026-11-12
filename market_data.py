@@ -9,38 +9,11 @@ import pandas as pd
 import streamlit as st
 
 from models import AnalysisConfig, ValidationError
+from price_validation import validate_prices
 
 DEMO_START = "2018-01-01"
 DEMO_END = "2026-10-30"
 
-
-def validate_prices(prices: pd.DataFrame, config: AnalysisConfig) -> pd.DataFrame:
-    if not isinstance(prices, pd.DataFrame) or list(prices.columns) != list(config.symbols):
-        raise ValidationError("Price columns do not match the portfolio. Failed symbols cannot be ignored.")
-    if not isinstance(prices.index, pd.DatetimeIndex) or prices.index.has_duplicates or not prices.index.is_monotonic_increasing:
-        raise ValidationError("Price dates must be unique and sorted in ascending order.")
-    if prices.index.tz is not None or not prices.index.equals(prices.index.normalize()):
-        raise ValidationError("Prices must use daily dates without time zones.")
-    if len(prices) > 4500 or prices.empty:
-        raise ValidationError("Price data is empty or exceeds the 4,500-row limit.")
-    try:
-        values = prices.to_numpy(dtype=float)
-    except (TypeError, ValueError):
-        raise ValidationError("Prices must be numeric.") from None
-    if not np.isfinite(values).all() or (values <= 0).any():
-        raise ValidationError("Prices contain missing, infinite or non-positive values.")
-    start = pd.Timestamp(config.start)
-    visible = prices.loc[config.start:config.end]
-    if len(visible) < 2:
-        raise ValidationError("Fewer than two common trading days. Extend the date range or check the symbols.")
-    # Previous day's long average is required to detect an actual crossing.
-    if (prices.index < visible.index[0]).sum() < config.long_window:
-        raise ValidationError(f"Insufficient shared history: at least {config.long_window} trading days of warm-up are needed. Move the start date forward or reduce the long window.")
-    if prices.index[-1] > pd.Timestamp(config.end):
-        raise ValidationError("The price snapshot contains dates beyond the analysis end date.")
-    if (start - prices.index[0]).days > 1800:
-        raise ValidationError("The warm-up period exceeds the supported range.")
-    return prices.astype(float)
 
 
 @st.cache_data(show_spinner=False, max_entries=32)

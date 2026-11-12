@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 
 import pandas as pd
 
-from market_data import validate_prices
+from price_validation import validate_prices
 from models import AnalysisConfig, ValidationError
 from trading_strategy import TRADE_COLUMNS, StrategyResult, analyze
 
@@ -179,3 +179,8 @@ class SQLiteStore:
         if not row:
             raise ValidationError("Experiment not found.")
         return validate_record(json.loads(row[0]))
+
+    def delete(self, record_id: str):
+        """Remove exactly the user-selected local record; never execute input as SQL."""
+        with self.connect() as conn:
+            conn.execute("DELETE FROM experiments WHERE id = ?", (record_id,))

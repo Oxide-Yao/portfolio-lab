@@ -1,12 +1,13 @@
 """Cash-account backtest: signals at close, orders executed next common close."""
 from dataclasses import dataclass
 import math
+from numbers import Real
 
 import numpy as np
 import pandas as pd
 
-from market_data import validate_prices
-from models import AnalysisConfig
+from price_validation import positive_real_values, validate_prices
+from models import AnalysisConfig, ValidationError
 
 STRATEGIES = {"hold": "Buy & hold", "golden": "Golden cross", "stop": "Golden cross + stop"}
 COLORS = {"hold": "#8194B0", "golden": "#5277C3", "stop": "#127C68"}
@@ -21,7 +22,11 @@ class StrategyResult:
 
 
 def risk_metrics(equity: pd.Series, initial: float) -> dict:
-    values = np.r_[initial, equity.to_numpy(dtype=float)]
+    if isinstance(initial, (bool, np.bool_)) or not isinstance(initial, Real) or not math.isfinite(initial) or initial <= 0:
+        raise ValidationError("Initial capital must be a finite positive real number.")
+    if not isinstance(equity, pd.Series) or equity.empty:
+        raise ValidationError("Equity must be a non-empty series.")
+    values = np.r_[initial, positive_real_values(equity.to_numpy(), 'Equity values')]
     changes = values[1:] / values[:-1] - 1
     drawdown = values / np.maximum.accumulate(values) - 1
     return {
@@ -33,8 +38,14 @@ def risk_metrics(equity: pd.Series, initial: float) -> dict:
 
 
 def run_strategy(prices: pd.DataFrame, config: AnalysisConfig, kind: str) -> StrategyResult:
+    """Validate the standalone entry point just as strictly as analyze()."""
     if kind not in STRATEGIES:
         raise ValueError("Unknown strategy")
+    config.validate()
+    return _run_validated_strategy(validate_prices(prices, config), config, kind)
+
+
+def _run_validated_strategy(prices: pd.DataFrame, config: AnalysisConfig, kind: str) -> StrategyResult:
     displayed = prices.loc[config.start:config.end]
     portfolio = pd.Series(0.0, index=displayed.index, name=kind)
     events = []
@@ -102,4 +113,4 @@ def run_strategy(prices: pd.DataFrame, config: AnalysisConfig, kind: str) -> Str
 def analyze(prices: pd.DataFrame, config: AnalysisConfig) -> dict[str, StrategyResult]:
     config.validate()
     prices = validate_prices(prices, config)
-    return {key: run_strategy(prices, config, key) for key in STRATEGIES}
+    return {key: _run_validated_strategy(prices, config, key) for key in STRATEGIES}

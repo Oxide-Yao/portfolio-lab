@@ -2,44 +2,82 @@
 import pandas as pd
 import streamlit as st
 
-from charts import allocation_chart, correlation_chart, equity_chart, price_chart
+from charts import allocation_chart, correlation_chart, drawdown_chart, equity_chart, price_chart
 from trading_strategy import STRATEGIES
 
 CSS = """
 <style>
-:root { --ink:#142033; --muted:#64748B; --line:#E4EAF1; }
-.stApp { background:#F4F7FB; }
-.block-container { max-width:1320px; padding-top:2.1rem; padding-bottom:2rem; }
-[data-testid="stSidebar"] { background:#FFFFFF; border-right:1px solid var(--line); }
-[data-testid="stSidebar"] .block-container { padding-top:1.3rem; }
-h1 { font-size:2.05rem !important; font-weight:720 !important; letter-spacing:-.045em; }
-h2 { font-size:1.25rem !important; font-weight:650 !important; letter-spacing:-.02em; }
-h3 { font-size:1.05rem !important; font-weight:650 !important; }
-[class*="st-key-card_"] { border-color:var(--line) !important; border-radius:14px !important; background:#FFFFFF; box-shadow:0 2px 8px rgba(20,32,51,.025); }
-[data-testid="stMetricValue"] { font-size:1.8rem; letter-spacing:-.04em; }
-.brand { display:flex; align-items:center; gap:11px; margin-bottom:12px; }
-.brand-mark { width:38px; height:38px; display:flex; align-items:center; justify-content:center; border-radius:11px; background:#127C68; color:white; font-weight:750; font-size:17px; }
-.brand-name { font-size:20px; font-weight:750; color:var(--ink); letter-spacing:-.6px; }
-.brand-sub { font-size:12px; color:var(--muted); letter-spacing:.05em; margin-top:1px; }
-.eyebrow { color:#127C68; font-size:12px; font-weight:650; letter-spacing:2px; margin:12px 0 4px; }
-.metric-label { color:var(--muted); font-size:14px; margin-bottom:9px; }
-.metric-value { color:var(--ink); font-size:clamp(22px,2.15vw,29px); line-height:1.2; font-weight:700; letter-spacing:-.9px; overflow-wrap:anywhere; }
-.metric-help { color:var(--muted); font-size:12px; line-height:1.5; margin-top:11px; }
-.metric-positive { color:#16866A; } .metric-negative { color:#D65A63; }
-.footer { font-size:12px; color:var(--muted); border-top:1px solid var(--line); margin-top:22px; padding-top:16px; }
-button[kind="primary"] { border-radius:8px; font-weight:600; }
-[data-testid="stRadio"] > div { gap:1.15rem; }
-[data-testid="stAlert"] { border-radius:10px; }
-@media (max-width:1250px) {
+:root { --ink:#283140; --muted:#6b7688; --line:#e2e7ee; --blue:#456ca3; --paper:#fbfcfd; }
+.stApp, [data-testid="stHeader"] { background:var(--paper); color:var(--ink); }
+.stMain .block-container { max-width:1600px; padding:4.1rem 2.4rem 2rem; }
+[data-testid="stSidebar"] { background:#f1f4f9; border-right:1px solid var(--line); min-width:300px; max-width:340px; }
+[data-testid="stSidebar"] > div:first-child { padding-top:.6rem; }
+[data-testid="stSidebar"] [data-testid="stVerticalBlock"] { gap:.65rem; }
+[data-testid="stSidebar"] h3 { font-family:inherit; font-size:17px; font-weight:550; }
+[data-testid="stSidebar"] [data-testid="stNumberInputStepDown"],
+[data-testid="stSidebar"] [data-testid="stNumberInputStepUp"] { display:none; }
+.stMain [data-testid="stVerticalBlock"] { gap:1rem; }
+h1,h2,h3 { color:var(--ink); }
+h1 { font-family:Georgia,"Times New Roman",serif !important; font-size:2rem !important; font-weight:400 !important; letter-spacing:-.7px; padding-top:.2rem !important; }
+h2,h3 { font-family:Georgia,"Times New Roman",serif !important; font-weight:400 !important; }
+h2 { font-size:1.5rem !important; } h3 { font-size:1.22rem !important; }
+p,li { font-size:14px; } [data-testid="stCaptionContainer"] p { font-size:12px; color:var(--muted); }
+hr { margin:.5rem 0 1rem; border-color:var(--line); }
+input, [data-baseweb="select"] > div { background:white !important; border-radius:5px !important; }
+button { border-radius:6px !important; min-height:40px; }
+button[kind="primary"] { background:var(--blue); border-color:var(--blue); color:white; }
+button:focus-visible,input:focus-visible { outline:2px solid var(--blue) !important; outline-offset:2px; }
+[class*="st-key-card_"] { border-color:var(--line) !important; border-radius:7px !important; background:transparent; box-shadow:none; }
+.brand { display:flex; align-items:center; gap:12px; }
+.brand-mark { display:grid; place-items:center; width:39px; height:43px; border:1px solid var(--line); border-radius:8px; color:var(--blue); }
+.brand-name { font-family:Georgia,"Times New Roman",serif; font-size:27px; line-height:1.2; color:var(--ink); }
+.brand-sub { color:var(--muted); font-size:13px; margin-top:5px; }
+.source-badge { display:inline-block; background:#eaf0f8; color:var(--blue); padding:5px 9px; border-radius:4px; font-size:12px; margin-top:9px; }
+.workflow { display:flex; align-items:center; gap:11px; flex-wrap:wrap; color:var(--muted); font-size:12px; margin:10px 0 1px; }
+.workflow-step.current { color:var(--blue); font-weight:650; } .workflow-arrow { color:#a0a8b4; }
+.context-line { display:flex; gap:10px 24px; flex-wrap:wrap; font-size:14px; margin:2px 0 8px; }
+.context-meta { color:var(--muted); font-size:13px; margin-bottom:14px; }
+.st-key-workspace_navigation { border-bottom:1px solid var(--line); margin-bottom:10px; }
+.st-key-workspace_navigation [role="radiogroup"] { gap:22px; flex-wrap:wrap; }
+.st-key-workspace_navigation label { padding:9px 0 13px; border-bottom:2px solid transparent; margin:0 !important; }
+.st-key-workspace_navigation label > div > div:first-child { display:none; }
+.st-key-workspace_navigation label:has(input:checked) { border-color:var(--blue); }
+.st-key-workspace_navigation label:has(input:checked) p { color:var(--blue); }
+.st-key-workspace_navigation label p { color:var(--muted); font-size:14px; }
+.st-key-workspace_navigation label:focus-within { outline:2px solid var(--blue); outline-offset:3px; }
+.metric-label { color:var(--muted); font-size:12px; margin-bottom:7px; }
+.metric-value { color:var(--ink); font-size:clamp(21px,2.2vw,31px); line-height:1.25; font-weight:500; letter-spacing:-.6px; overflow-wrap:anywhere; font-variant-numeric:tabular-nums; }
+.metric-help { color:var(--muted); font-size:11px; line-height:1.5; margin-top:8px; }
+.st-key-metric_grid [data-testid="stColumn"] { border-right:1px solid var(--line); padding-right:12px; }
+.st-key-metric_grid [data-testid="stColumn"]:last-child { border:0; }
+.metric-positive { color:var(--ink); } .metric-negative { color:var(--ink); }
+.sidebar-heading { display:flex; justify-content:space-between; align-items:center; font-size:16px; margin:8px 0 10px; }
+.sidebar-step { font-family:Georgia,serif; color:var(--muted); font-size:12px; letter-spacing:1px; }
+.holding-label { font-size:13px; padding-top:10px; overflow-wrap:anywhere; }
+.holding-amount { text-align:right; color:var(--muted); font-size:12px; padding-top:10px; font-variant-numeric:tabular-nums; }
+.holding-header { display:grid; grid-template-columns:1fr 1.15fr 1.05fr; gap:8px; color:var(--muted); font-size:11px; }
+.holding-header span:last-child { text-align:right; }
+.st-key-holdings_rows [data-testid="stHorizontalBlock"] { flex-wrap:nowrap !important; gap:8px; }
+.st-key-holdings_rows [data-testid="stColumn"] { min-width:0 !important; flex:1 1 0 !important; }
+.st-key-holdings_rows [data-testid="stColumn"]:nth-child(2) { flex:1.15 1 0 !important; }
+.st-key-holdings_rows [data-testid="stColumn"]:nth-child(3) { flex:1.05 1 0 !important; }
+.footer { font-size:11px; color:var(--muted); border-top:1px solid var(--line); margin-top:22px; padding-top:16px; }
+[data-testid="stAlert"] { border-radius:5px; }
+@media (max-width:1200px) and (min-width:761px) {
+ .stMain .block-container { padding-left:1.5rem; padding-right:1.5rem; }
  .st-key-metric_grid [data-testid="stHorizontalBlock"] { flex-wrap:wrap; }
- .st-key-metric_grid [data-testid="stColumn"] { flex:1 1 calc(50% - 1rem) !important; min-width:calc(50% - 1rem); }
+ .st-key-metric_grid [data-testid="stColumn"] { flex:1 1 calc(50% - 1rem) !important; min-width:calc(50% - 1rem); margin-bottom:12px; }
+ .st-key-metric_grid [data-testid="stColumn"]:nth-child(2) { border:0; }
 }
 @media (max-width:760px) {
- .block-container { padding:1.2rem 1rem; }
- h1 { font-size:1.7rem !important; }
- [data-testid="stHorizontalBlock"] { flex-direction:column; }
- [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] { width:100% !important; flex:1 1 100% !important; }
- .metric-value { font-size:28px; }
+ .stMain .block-container { padding:4rem 1rem 1.2rem; }
+ h1 { font-size:1.75rem !important; }
+ .stMain [data-testid="stHorizontalBlock"] { flex-wrap:wrap; }
+ .stMain [data-testid="stColumn"] { min-width:100% !important; flex:1 1 100% !important; }
+ .st-key-metric_grid [data-testid="stColumn"] { border:0; border-bottom:1px solid var(--line); padding-bottom:12px; }
+ .workflow { gap:7px; font-size:11px; }
+ .st-key-workspace_navigation [role="radiogroup"] { gap:12px; }
+ [data-testid="stSidebar"] { min-width:280px; max-width:320px; }
 }
 </style>
 """
@@ -54,12 +92,12 @@ def metric_cards(metrics):
     items = [
         ("Ending value", f"${metrics['final_value']:,.2f}", "Cash + marked-to-market positions", ""),
         ("Total return", f"{metrics['total_return']:+.2%}", "Since inception · incurred fees included", "metric-positive" if metrics["total_return"] >= 0 else "metric-negative"),
-        ("Max drawdown", f"{metrics['max_drawdown']:.2%}", "Largest decline from a prior peak", "metric-negative" if metrics["max_drawdown"] < 0 else ""),
-        ("Annual volatility", f"{metrics['volatility']:.2%}", "Daily return sample deviation × √252", ""),
+        ("Maximum drawdown", f"{metrics['max_drawdown']:.2%}", "Largest decline from a prior peak", "metric-negative" if metrics["max_drawdown"] < 0 else ""),
+        ("Annualized volatility", f"{metrics['volatility']:.2%}", "Daily return sample deviation × √252", ""),
     ]
     with st.container(key="metric_grid"):
         for i, (column, (label, value, help_text, color)) in enumerate(zip(st.columns(4, gap="small"), items)):
-            with column, st.container(border=True, key=f"card_metric{i}"):
+            with column:
                 st.markdown(f'<div class="metric-label">{label}</div><div class="metric-value {color}">{value}</div><div class="metric-help">{help_text}</div>', unsafe_allow_html=True)
 
 
@@ -85,35 +123,46 @@ def trade_table(trades):
                                   "reason": "Reason", "pnl": "Net P&L (USD)", "return": "Net return", "holding_days": "Calendar days held"}).replace({"Side": {"buy": "Buy", "sell": "Sell"}})
 
 
-def overview(config, prices, results):
-    metric_cards(results["hold"].metrics)
-    with st.container(border=True, key="card_equity"):
-        left, right = st.columns([3, 2])
-        with left:
-            st.subheader("Portfolio value over time")
-            st.caption("Buy & hold · No rebalancing after initial allocation")
-        with right:
-            st.caption(f"Initial capital ${config.capital:,.2f}  ·  {len(config.symbols)} stocks")
-        plot(equity_chart(results, config.capital), "overview_equity")
-    left, right = st.columns(2, gap="medium")
-    with left, st.container(border=True, key="card_allocation"):
+def overview(config, prices, results, selected="hold"):
+    metric_cards(results[selected].metrics)
+    st.subheader("Portfolio value")
+    st.caption(f"{STRATEGIES[selected]} · Hover or tap to inspect · USD")
+    plot(equity_chart(results, config.capital, selected=selected), "overview_equity")
+    st.divider()
+    left, right = st.columns([1.2, 1], gap="large")
+    with left:
+        st.subheader("Drawdown over time")
+        st.caption("Below the previous peak · includes initial capital")
+        plot(drawdown_chart(results, config.capital, selected), "overview_drawdown")
+    with right:
         st.subheader("Initial allocation")
-        st.caption("Independent cash sleeves · fractional shares")
+        st.caption("Applied target weights · independent cash sleeves")
         plot(allocation_chart(config), "allocation")
         weights = [w / sum(config.weights) for w in config.weights]
         allocation = pd.DataFrame({"Stock": config.symbols, "Initial weight": weights,
-                                   "Allocation (USD)": [w * config.capital for w in weights]})
-        st.dataframe(allocation.style.format({"Initial weight": "{:.2%}", "Allocation (USD)": "${:,.2f}"}),
+            "Allocation (USD)": [w * config.capital for w in weights]})
+        st.dataframe(allocation.style.format({"Initial weight":"{:.2%}","Allocation (USD)":"${:,.2f}"}),
                      hide_index=True, width="stretch")
-    with right, st.container(border=True, key="card_correlation"):
+    st.button("Compare strategies →", on_click=lambda: st.session_state.update(page="Strategy comparison"), key="to_strategy")
+
+
+def risk_page(config, prices, results, selected="hold"):
+    metric_cards(results[selected].metrics)
+    st.subheader("Where the portfolio takes risk")
+    st.caption(f"{STRATEGIES[selected]} · full-period historical measures")
+    plot(drawdown_chart(results, config.capital, selected), "risk_drawdown")
+    left, right = st.columns([1.25,1], gap="large")
+    with left:
         st.subheader("Return correlations")
-        st.caption("Daily returns in the analysis period · scale −1 to +1")
+        st.caption("Daily stock returns · analysis period only · −1 to +1")
         plot(correlation_chart(prices.loc[config.start:config.end]), "correlation")
-        st.caption("+1 indicates moves in the same direction; −1 indicates opposite moves. Historical correlations do not guarantee future diversification. Constant-price series have undefined correlations, shown blank.")
-    with st.container(border=True, key="card_next_step"):
-        st.subheader("Explore what different rules change")
-        st.write("Keep capital and weights fixed. See how entry signals and exit rules affect return and risk.")
-        st.button("Explore strategies →", on_click=lambda: st.session_state.update(page="Strategy lab"), key="to_strategy")
+    with right:
+        st.subheader("Read the risk measures")
+        st.write("**Maximum drawdown** is the deepest drop from a previous portfolio peak, including the starting capital.")
+        st.write("**Annualized volatility** measures how much daily portfolio returns vary, scaled by √252. It does not predict the next year's loss.")
+        st.write("**Correlation** compares stock return movements. Values near +1 mean similar movement; values near −1 mean opposite movement. Constant series are undefined and shown blank.")
+        st.info("A lower historical risk measure does not guarantee safety. Signal strategies may spend long periods in cash.")
+    st.caption("A stop is an exit trigger, not a guaranteed fill price. The next trading close can realize a larger loss than the configured stop.")
 
 
 def strategy_page(config, prices, results):
@@ -121,7 +170,7 @@ def strategy_page(config, prices, results):
         st.caption("EXPERIMENT SETTINGS · Parameters used for the displayed results")
         st.write(f"**MA {config.short_window} / {config.long_window}** · Take profit **{config.take_profit:.1%}** · Stop loss **{config.stop_loss:.1%}** · Holding limit **{config.max_hold_days} calendar days** · One-way fee **{config.fee:.2%}**")
     with st.container(border=True, key="card_strategy_equity"):
-        st.subheader("Three strategies. One starting point.")
+        st.subheader("Strategy comparison")
         st.caption("Independent cash sleeves · signal strategies start in cash · open positions marked at the last close")
         plot(equity_chart(results, config.capital, compare=True), "strategy_equity")
     with st.container(border=True, key="card_strategy_metrics"):
@@ -165,4 +214,5 @@ def method_page():
         with (left if i % 2 == 0 else right), st.container(border=True, key=f"card_method{i}"):
             st.subheader(title)
             st.write(text)
-    st.warning("Demo prices are generated with fixed seeds and are not real stock history or evidence of real returns. The base strategy implements the supplied rules and still needs to be checked against the original course code.")
+    st.info("Course comparison completed in Phase 2: the teacher example uses crossing-day fills and independent trades. This project uses next-close fills, finite cash sleeves, fees and marked open positions. Different trade records are expected; this is an explained extension of the course example.")
+    st.caption("Demo prices use fixed seeds and are not real stock history. Supplied-CSV verification is available through the separate verification command; the web selector offers Demo and Yahoo.")
