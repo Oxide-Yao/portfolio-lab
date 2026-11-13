@@ -275,5 +275,4 @@ def method_page():
         with (left if i % 2 == 0 else right), st.container(border=True, key=f"card_method{i}"):
             st.subheader(title)
             st.write(text)
-    st.info("Course comparison completed in Phase 2: the teacher example uses crossing-day fills and independent trades. This project uses next-close fills, finite cash sleeves, fees and marked open positions. Different trade records are expected; this is an explained extension of the course example.")
     st.caption("Demo prices use fixed seeds and are not real stock history. Supplied-CSV verification is available through the separate verification command; the web selector offers Demo and Yahoo.")
