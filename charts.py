@@ -3,6 +3,7 @@ import numpy as np
 import plotly.graph_objects as go
 
 from trading_strategy import COLORS, STRATEGIES
+from strategy_labels import strategy_name, strategy_color, strategy_dash
 
 FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif'
 
@@ -11,9 +12,9 @@ def style(fig, height=360, ytitle=None):
     fig.update_layout(template="plotly_white", height=height,
                       margin=dict(l=12, r=16, t=20, b=12),
                       paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                      font=dict(family=FONT, size=13, color="#6b7688"),
+                      font=dict(family=FONT, size=14, color="#526174"),
                       hoverlabel=dict(bgcolor="#283140", font_color="white"),
-                      legend=dict(orientation="h", y=1.12, x=0, font_size=13),
+                      legend=dict(orientation="h", y=-.22, x=0, font_size=12),
                       hovermode="x unified")
     fig.update_xaxes(showgrid=False, zeroline=False, title=None)
     fig.update_yaxes(gridcolor="#e2e7ee", zeroline=False, title=ytitle)
@@ -22,11 +23,11 @@ def style(fig, height=360, ytitle=None):
 
 def equity_chart(results, capital, compare=False, selected="hold"):
     fig = go.Figure()
-    keys = list(STRATEGIES) if compare else [selected]
+    keys = list(results) if compare else [selected]
     for key in keys:
         equity = results[key].equity
-        fig.add_trace(go.Scatter(x=equity.index, y=equity, name=STRATEGIES[key], mode="lines",
-                                 line=dict(color={"hold":"#456ca3","golden":"#7f93ad","stop":"#5e7fbd"}[key], width=2.4, dash={"hold":"solid","golden":"dash","stop":"dot"}[key] if compare else "solid"),
+        fig.add_trace(go.Scatter(x=equity.index, y=equity, name=strategy_name(key), mode="lines",
+                                 line=dict(color=strategy_color(key), width=2.4, dash=strategy_dash(key) if compare else "solid"),
                                  fill=None,
                                  hovertemplate="%{y:$,.2f}<extra>%{fullData.name}</extra>"))
     fig.add_hline(y=capital, line_dash="dot", line_color="#A4AEBE", line_width=1,
@@ -73,7 +74,7 @@ def price_chart(prices, config, symbol, result):
         (f"Short MA · {config.short_window}d", full.rolling(config.short_window).mean().reindex(visible.index), "#D49E42"),
         (f"Long MA · {config.long_window}d", full.rolling(config.long_window).mean().reindex(visible.index), "#5277C3"),
     ]:
-        fig.add_trace(go.Scatter(x=visible.index, y=series, name=name, mode="lines", line=dict(color=color, width=1.7), hovertemplate="%{y:$,.2f}<extra>%{fullData.name}</extra>"))
+        fig.add_trace(go.Scatter(x=visible.index, y=series, name=name, mode="lines", line=dict(color=color, width=1.7, dash="dash" if name.startswith("Short") else "dot" if name.startswith("Long") else "solid"), hovertemplate="%{y:$,.2f}<extra>%{fullData.name}</extra>"))
     trades = result.trades
     if not trades.empty:
         for side, name, marker, color in [("buy", "Buy execution", "triangle-up", "#16866A"), ("sell", "Sell execution", "triangle-down", "#D65A63")]:
@@ -88,13 +89,13 @@ def price_chart(prices, config, symbol, result):
 def drawdown_chart(results, capital, selected="hold", compare=False):
     """Include initial capital in the peak, matching verified risk metrics."""
     fig = go.Figure()
-    for key in (list(STRATEGIES) if compare else [selected]):
+    for key in (list(results) if compare else [selected]):
         equity = results[key].equity
         values = np.r_[capital, equity.to_numpy()]
         drawdown = (values / np.maximum.accumulate(values) - 1)[1:]
-        fig.add_trace(go.Scatter(x=equity.index, y=drawdown, name=STRATEGIES[key],
-            mode="lines", line=dict(color={"hold":"#456ca3","golden":"#7f93ad","stop":"#5e7fbd"}[key],
-            width=2, dash={"hold":"solid","golden":"dash","stop":"dot"}[key]),
+        fig.add_trace(go.Scatter(x=equity.index, y=drawdown, name=strategy_name(key),
+            mode="lines", line=dict(color=strategy_color(key),
+            width=2, dash=strategy_dash(key)),
             fill=None if compare else "tozeroy", fillcolor="rgba(69,108,163,.08)",
             hovertemplate="%{y:.2%}<extra>%{fullData.name}</extra>"))
     style(fig, height=280, ytitle="Drawdown")

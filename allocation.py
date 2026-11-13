@@ -2,7 +2,7 @@
 from decimal import Decimal, ROUND_HALF_UP
 import math
 
-from models import ValidationError
+from models import ValidationError, weight_guidance
 
 MAX_CAPITAL = 1_000_000_000_000.0
 
@@ -34,7 +34,7 @@ def resolve_allocation(mode, values, capital=None):
     else:
         weights = tuple(values)
         if any(w > 100 for w in weights) or not math.isclose(sum(weights), 100, abs_tol=0.001):
-            raise ValidationError('Weights must be non-negative and total 100% (tolerance: 0.001 percentage points).')
+            raise ValidationError(weight_guidance(weights))
         if capital is None or not math.isfinite(capital) or not 0 < capital <= MAX_CAPITAL:
             raise ValidationError('Starting capital must be above USD 0 and at most USD 1 trillion.')
     return float(capital), weights

@@ -46,7 +46,7 @@ def test_invalid_weights_disable_apply_and_preserve_result(app):
     app.number_input(key='weight_AAPL').set_value(10.).run()
     assert app.button(key='analyze').disabled
     assert app.button(key='header_save').disabled
-    assert any('total 100%' in x.value for x in app.error)
+    assert any('Weights total 70%. Allocate the remaining 30 percentage points.' in x.value for x in app.error)
     assert any('Unapplied changes' in x.value for x in app.warning)
     assert app.session_state.active['calculated_at']==before
     app.number_input(key='weight_AAPL').set_value(40.).run()
@@ -56,6 +56,8 @@ def test_invalid_weights_disable_apply_and_preserve_result(app):
 
 def test_save_compare_and_restore_exact_snapshot(app):
     page(app,'Saved experiments')
+    assert app.text_input(key='experiment_name').value
+    app.text_input(key='experiment_name').set_value('').run()
     click(app,key='save_snapshot')
     assert any('Experiment name' in x.value for x in app.error)
     save(app,'First analysis')
@@ -140,16 +142,17 @@ def test_progress_keeps_checks_and_correct_highlight_after_save(app):
     assert 'aria-current="step">✓ Configure portfolio' in workflow
 
 
-def test_edit_invalidates_completion_blocks_save_and_does_not_change_results(app):
+def test_edit_retains_completion_blocks_save_and_does_not_change_results(app):
     page(app,'Risk analysis');page(app,'Strategy comparison');save(app,'Before edit')
     before=app.session_state.active['calculated_at']
     app.number_input(key='fee').set_value(.5).run()
-    assert app.session_state.completed==set()
+    assert app.session_state.completed=={'Overview','Risk analysis','Strategy comparison','Saved experiments'}
     assert app.button(key='save_snapshot').disabled
     assert app.session_state.active['calculated_at']==before
     click(app,key='analyze')
     assert app.session_state.active['config'].fee==.005
     assert app.session_state.completed=={'Overview'}
+    page(app,'Saved experiments')
     assert not app.button(key='save_snapshot').disabled
 
 
@@ -345,3 +348,117 @@ def test_hot_reload_migrates_existing_draft_with_a_changed_stock_list(app):
     assert app.number_input(key='weight_NVDA').value==25.
     amount_mode(app)
     assert app.number_input(key='amount_NVDA').value==25000.
+
+
+def test_40_45_40_restores_clean_draft_and_all_completion(app):
+    page(app,'Risk analysis');page(app,'Strategy comparison');save(app,'Original run')
+    before=app.session_state.active
+    completed=set(app.session_state.completed)
+    page(app,'Overview')
+    app.number_input(key='weight_AAPL').set_value(45.).run()
+    assert app.session_state.completed==completed
+    assert any('Weights total 105%. Reduce 5 percentage points' in x.value for x in app.error)
+    assert app.button(key='main_apply').disabled
+    assert app.session_state.active['calculated_at']==before['calculated_at']
+    app.number_input(key='weight_AAPL').set_value(40.).run()
+    assert app.session_state.completed==completed
+    assert not any('Unapplied changes' in x.value for x in app.warning)
+    assert not app.button(key='header_save').disabled
+    assert 'aria-current="step">✓ Configure portfolio' in next(x.value for x in app.markdown if 'Experiment progress' in x.value)
+
+
+def test_library_visit_is_not_a_save_and_dirty_page_highlight_is_independent(app):
+    page(app,'Saved experiments')
+    assert app.session_state.completed=={'Overview'}
+    page(app,'Risk analysis')
+    app.number_input(key='capital').set_value(150000.).run()
+    html=next(x.value for x in app.markdown if 'Experiment progress' in x.value)
+    assert 'aria-current="step">✓ Analyze risk' in html
+    assert app.session_state.active['config'].capital==100000.
+
+
+def test_failure_preserves_version_progress_and_reverting_clears_failure(app,monkeypatch):
+    import market_data
+    from models import ValidationError
+    page(app,'Risk analysis');page(app,'Strategy comparison');save(app,'Before failure')
+    completed=set(app.session_state.completed)
+    before=app.session_state.active
+    def fail(*a,**k):raise ValidationError('Test connection failure: retry later.')
+    monkeypatch.setattr(market_data,'yahoo_prices',fail)
+    app.selectbox(key='source').set_value('yahoo').run()
+    click(app,key='main_apply')
+    assert app.session_state.completed==completed
+    assert app.session_state.active['calculated_at']==before['calculated_at']
+    assert any('Test connection failure' in x.value for x in app.error)
+    app.selectbox(key='source').set_value('demo').run()
+    assert not app.session_state.analysis_error
+    assert not app.button(key='header_save').disabled
+    assert app.session_state.completed==completed
+
+
+def test_inline_dates_and_symbols_are_actionable(app):
+    app.date_input(key='end').set_value(date(2022,12,31)).run()
+    assert app.button(key='analyze').disabled
+    assert any('The end date must be later than the start date.' in x.value for x in app.error)
+    app.date_input(key='end').set_value(date(2025,12,31)).run()
+    app.text_input(key='symbols').set_value('AAPL, AAPL').run()
+    assert app.button(key='analyze').disabled
+    assert any('Select Update list' in x.value for x in app.warning)
+    click(app,'Update list')
+    assert any('Remove repeated symbols' in x.value for x in app.error)
+
+
+def test_header_opens_naming_directly_and_save_failure_keeps_name(app,monkeypatch):
+    import experiments
+    page(app,'Risk analysis')
+    click(app,key='header_save')
+    assert app.text_input(key='experiment_name').value
+    app.text_input(key='experiment_name').set_value('Keep my name').run()
+    original=experiments.save_batch
+    def fail(*a,**k):raise OSError('Disk is full')
+    monkeypatch.setattr(experiments,'save_batch',fail)
+    click(app,key='save_snapshot')
+    assert app.text_input(key='experiment_name').value=='Keep my name'
+    assert any('Disk is full' in x.value for x in app.error)
+    assert 'Saved experiments' not in app.session_state.completed
+    monkeypatch.setattr(experiments,'save_batch',original)
+    click(app,key='save_snapshot')
+    assert any('Keep my name' in x.value for x in app.success)
+    assert any(b.label=='Download JSON' for b in app.get('download_button'))
+    click(app,'View saved experiments')
+    assert app.session_state.page=='Saved experiments'
+    assert not app.session_state.show_save
+    page(app,'Overview');click(app,key='header_save')
+    assert app.text_input(key='experiment_name').value=='Keep my name'
+
+
+def test_applied_source_context_updates_only_on_success(app,monkeypatch):
+    import market_data
+    from storage import export_records, import_records, make_record, restore_record
+    original=app.session_state.active
+    prices=original['prices'].copy()*1.1
+    monkeypatch.setattr(market_data,'yahoo_prices',lambda *a,**k:(prices, ['Controlled Yahoo fixture']))
+    app.selectbox(key='source').set_value('yahoo').run()
+    assert any('still use Synthetic data (Demo)' in x.value for x in app.warning)
+    assert any('Synthetic data · Demo' in x.value for x in app.markdown)
+    click(app,key='main_apply')
+    assert app.session_state.active['config'].source=='yahoo'
+    assert app.session_state.completed=={'Overview'}
+    assert any('Yahoo · Historical data' in x.value for x in app.markdown)
+    assert any('Historical simulation' in x.value for x in app.markdown)
+    pd=pytest.importorskip('pandas')
+    pd.testing.assert_frame_equal(app.session_state.active['prices'],prices)
+    save(app,'Yahoo fixture archive')
+    record=next(iter(app.session_state.session_records.values()))
+    imported=import_records(export_records([record]))[0]
+    c,p,r=restore_record(imported)
+    assert c==app.session_state.active['config']
+    pd.testing.assert_frame_equal(p,prices,check_freq=False)
+    for key in r:
+        pd.testing.assert_series_equal(r[key].equity,app.session_state.active['results'][key].equity,check_freq=False)
+        pd.testing.assert_frame_equal(r[key].trades,app.session_state.active['results'][key].trades)
+    app.selectbox(key='source').set_value('demo').run()
+    assert any('still use Yahoo Historical data' in x.value for x in app.warning)
+    click(app,key='main_apply')
+    assert app.session_state.active['config'].source=='demo'
+    pd.testing.assert_frame_equal(app.session_state.active['prices'],original['prices'])

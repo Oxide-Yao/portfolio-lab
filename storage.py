@@ -69,10 +69,10 @@ def _same(actual, expected):
 
 def validate_record(record: dict) -> dict:
     keys = {"version", "id", "name", "created_at", "calculated_at", "config", "notes", "prices", "results"}
-    if not isinstance(record, dict) or set(record) != keys:
+    if not isinstance(record, dict) or set(record) not in (keys, keys | {"research"}):
         raise ValidationError("Experiment fields are incomplete or contain unknown entries.")
-    if type(record["version"]) is not int or record["version"] != SCHEMA_VERSION:
-        raise ValidationError("Unsupported experiment version. Only version 1 is supported.")
+    if type(record["version"]) is not int or record["version"] not in (1, 2) or ((record["version"] == 2) != ("research" in record)):
+        raise ValidationError("Unsupported experiment version. Versions 1 and 2 are supported.")
     if not isinstance(record["name"], str) or not 1 <= len(record["name"].strip()) <= 80:
         raise ValidationError("Experiment name must contain 1–80 characters.")
     try:
@@ -105,8 +105,16 @@ def validate_record(record: dict) -> dict:
     except (ValueError, TypeError, OverflowError):
         raise ValidationError("Invalid snapshot date format.") from None
     prices = validate_prices(prices, config)
+    if 'research' in record:
+        from research_core import restore_research_snapshot
+        rp, rc, run = restore_research_snapshot(json.dumps(record['research'], allow_nan=False).encode())
+        if rc != config or not _same(record['prices'], record['research']['inputs']['prices']):
+            raise ValidationError('Research and portfolio snapshot inputs must match.')
+        expected = run['results']
+    else:
+        expected = analyze(prices, config)
     # Never trust imported statistics or trades. Recompute before admitting a record.
-    if not _same(record["results"], encode_results(analyze(prices, config))):
+    if not _same(record["results"], encode_results(expected)):
         raise ValidationError("Import rejected: metrics, equity curves or trades do not match a replay of the price snapshot.")
     return record
 

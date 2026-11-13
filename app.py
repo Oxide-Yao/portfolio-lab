@@ -8,22 +8,24 @@ from zoneinfo import ZoneInfo
 import streamlit as st
 
 from allocation import MAX_CAPITAL, amount_total, amounts_from_weights, money, resolve_allocation
-from experiments import experiment_page
+from experiments import experiment_page, save_panel
 from market_data import DEMO_END, DEMO_START, load_prices
 from models import AnalysisConfig, ValidationError, parse_inputs
 from storage import SQLiteStore, restore_record
 from trading_strategy import STRATEGIES, analyze
 from ui import CSS, method_page, overview, risk_page, strategy_page
-from workflow import PAGES, progress_html, update_progress
+from workflow import PAGES, analysis_version, progress_html, update_progress
+from website_features import compute_features, feature_options, validate_features, restore_features
+from research_ui import feature_editor, set_feature_draft, market_view, stock_insights_page
+from planner_ui import planner_page, navigate_from_portfolio
+from strategy_labels import strategy_name
 
-st.set_page_config(page_title="Portfolio Lab · Stock portfolio strategy lab", page_icon="⚗", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Portfolio Lab · Stock portfolio strategy lab", page_icon="⚗", layout="wide", initial_sidebar_state="collapsed")
 st.markdown(CSS, unsafe_allow_html=True)
 
 
-def compute(config):
-    prices, notes = load_prices(config)
-    return {"config": config, "prices": prices, "results": analyze(prices, config), "notes": notes,
-            "calculated_at": datetime.now(timezone.utc).isoformat(), "name": None}
+def compute(config, features=None):
+    return compute_features(config, features)
 
 
 def set_draft(config):
@@ -100,8 +102,9 @@ def equal_allocation():
 
 if 'initialized' not in st.session_state:
     set_draft(AnalysisConfig())
+    set_feature_draft()
     st.session_state.update(initialized=True, page='Overview', session_records={}, analysis_error=None,
-        completed={'Overview'}, viewed_strategy='hold', last_draft_signature=None)
+        completed={'Overview'}, viewed_strategy='hold', last_draft_signature=None, progress_by_version={})
     # A reproducible offline example is calculated once; page navigation does not fetch prices.
     st.session_state.active = compute(AnalysisConfig())
 
@@ -121,8 +124,12 @@ if 'pending_record' in st.session_state:
     set_draft(restored_config)
     st.session_state.active = {'config':restored_config, 'prices':restored_prices, 'results':restored_results,
         'notes':record['notes'], 'calculated_at':record['calculated_at'], 'name':record['name']}
-    st.session_state.update(analysis_error=None, completed={'Overview'}, last_draft_signature=None,
-                            viewed_strategy='hold')
+    if 'research' in record:
+        st.session_state.active.update(restore_features(json.dumps(record['research']).encode()))
+    set_feature_draft(st.session_state.active.get('features'))
+    version=analysis_version(st.session_state.active)
+    st.session_state.setdefault('progress_by_version', {}).setdefault(version, {'Overview', 'Saved experiments'})
+    st.session_state.update(analysis_error=None, last_draft_signature=None, viewed_strategy='hold')
 
 store = None
 storage_error = None
@@ -132,11 +139,34 @@ if os.environ.get('PORTFOLIO_STORAGE', 'session') == 'sqlite':
     except Exception:
         storage_error = 'Cannot open local storage. Session records are available; check access to the data directory.'
 
-with st.sidebar:
+def request_apply():
+    st.session_state.apply_requested = True
+    st.session_state.portfolio_editor = False
+
+
+def show_save():
+    st.session_state.show_save = True
+
+
+def view_saved():
+    st.session_state.update(page='Saved experiments', show_save=False)
+
+
+# A single editor is always rendered, so its widgets survive closing and navigation.
+header = st.container(key='app_header')
+left, edit, save = header.columns([3, 1.2, 1.2], vertical_alignment='center')
+with left:
+    st.markdown('<div class="brand"><div class="brand-mark">⚗</div><div><div class="brand-name">Portfolio Lab</div><div class="brand-sub">Stock portfolio strategy lab</div></div></div>', unsafe_allow_html=True)
+with edit, st.popover('Edit portfolio', key='portfolio_editor', on_change='rerun', width='stretch'):
+    apply_slot = st.container(key='editor_apply_top')
     st.markdown('<div class="sidebar-heading">Build your portfolio <span class="sidebar-step">STEP 01</span></div>', unsafe_allow_html=True)
     st.selectbox('Data source', ['demo','yahoo'], format_func=lambda x: {'demo':'Demo · synthetic prices','yahoo':'Yahoo · historical prices'}[x], key='source')
     st.text_input('Stock symbols · up to 20', key='symbols', help='Separate unique US stock symbols with commas. Click Update list to reset an equal allocation across the validated stocks.')
     st.button('Update list', on_click=update_symbols, width='stretch')
+    entered=tuple(s.strip().upper() for s in st.session_state.symbols.replace('，', ',').split(','))
+    symbols_changed=entered != st.session_state.configured_symbols
+    if symbols_changed:
+        st.warning('Stock symbols have changed. Select Update list to update the holdings.')
     if st.session_state.symbol_error:
         st.error(st.session_state.symbol_error)
     allocation = st.session_state.allocation_draft
@@ -180,6 +210,8 @@ with st.sidebar:
     else:
         c1.caption(f'Total {sum(w for w in allocation["weights"] if w is not None):.2f}%')
     c2.button('Equal amounts' if amount_mode else 'Equal weight', on_click=equal_allocation, width='stretch')
+    if allocation_error:
+        st.error(allocation_error)
     if amount_mode:
         st.markdown('<div class="capital-label">Starting capital · USD <span>Calculated</span></div>', unsafe_allow_html=True)
     st.session_state.capital = capital
@@ -190,6 +222,13 @@ with st.sidebar:
                else 'Budget to allocate across the selected stocks. Amounts are rounded to cents.')
     st.date_input('Start date', min_value=date(1990,1,1), max_value=date(2100,1,1), key='start')
     st.date_input('End date', min_value=date(1990,1,1), max_value=date(2100,1,1), key='end')
+    date_error = None
+    if st.session_state.end <= st.session_state.start:
+        date_error = 'The end date must be later than the start date.'
+    elif (st.session_state.end - st.session_state.start).days > 3653:
+        date_error = 'Choose a date range of 10 years or less.'
+    if date_error:
+        st.error(date_error)
     with st.expander('Strategy settings & fees'):
         st.number_input('Short MA (trading days)',2,499,key='short')
         st.number_input('Long MA (trading days)',3,500,key='long')
@@ -198,13 +237,19 @@ with st.sidebar:
         st.number_input('Max holding (calendar days)',1,1095,key='hold_days')
         st.number_input('One-way fee (%)',0.,5.,step=.05,format='%.2f',key='fee')
 
+    features, feature_error = feature_editor(st.session_state.configured_symbols)
     draft, draft_error = None, None
     try:
+        if feature_error:
+            raise ValidationError(feature_error)
+        validate_features(features,st.session_state.configured_symbols)
         if allocation_error:
             raise ValidationError(allocation_error)
         entered=tuple(s.strip().upper() for s in st.session_state.symbols.replace('，',',').split(','))
         if entered != st.session_state.configured_symbols:
-            raise ValidationError('Stock list changed. Click Update list to validate stocks and reset an equal allocation.')
+            raise ValidationError('Stock symbols have changed. Select Update list to update the holdings.')
+        if date_error:
+            raise ValidationError(date_error)
         draft=parse_inputs(','.join(st.session_state.configured_symbols),
             ','.join(str(w) for w in weights),
             capital=capital,start=st.session_state.start.isoformat(),end=st.session_state.end.isoformat(),
@@ -213,77 +258,120 @@ with st.sidebar:
             max_hold_days=st.session_state.hold_days,fee=st.session_state.fee/100)
     except ValidationError as exc:
         draft_error=str(exc)
-    signature=json.dumps({'symbols':st.session_state.symbols,'configured':st.session_state.configured_symbols,
+    signature=json.dumps({'features':features,'symbols':st.session_state.symbols,'configured':st.session_state.configured_symbols,
         'weights':weights, 'allocation_values':allocation[mode + 's'] if allocation_error else None,
         **{k:str(st.session_state[k]) for k in ('capital','start','end','source','short','long','take_profit','stop_loss','hold_days','fee')}},sort_keys=True)
-    changed=st.session_state.last_draft_signature is not None and signature != st.session_state.last_draft_signature
     st.session_state.last_draft_signature=signature
-    if changed:
-        st.session_state.completed=set()
-    dirty=draft_error is not None or draft.to_dict()!=st.session_state.active['config'].to_dict()
-    if draft_error:
+    if st.session_state.get('error_signature') != signature:
+        st.session_state.analysis_error=None
+    dirty=draft_error is not None or draft.to_dict()!=st.session_state.active['config'].to_dict() or features!=st.session_state.active.get('features',feature_options())
+    if draft_error and draft_error not in (allocation_error, date_error) and not symbols_changed:
         st.error(draft_error)
-    analyze_clicked=st.button('Apply & reanalyze →' if dirty else 'Analyze portfolio →', type='primary',
-                              disabled=draft_error is not None, width='stretch', key='analyze')
-    if analyze_clicked:
-        try:
-            with st.spinner('Aligning prices and calculating portfolio accounts…'):
-                st.session_state.active=compute(draft)
-            st.session_state.update(analysis_error=None,completed={'Overview'})
-            dirty=False
-        except ValidationError as exc:
-            st.session_state.analysis_error=str(exc)
-        except Exception:
-            st.session_state.analysis_error='Analysis could not complete. Check your inputs and network, then retry. Offline Demo remains available.'
+    with apply_slot:
+        st.caption('Changes apply only when you analyze. Your current results stay visible.')
+        st.button('Apply & reanalyze →' if dirty else 'Analyze portfolio →', type='primary',
+                  disabled=draft_error is not None, width='stretch', key='analyze', on_click=request_apply)
+        if draft_error:
+            st.caption('Analysis unavailable: ' + draft_error)
+    st.button('Apply & reanalyze →' if dirty else 'Analyze portfolio →', type='primary',
+              disabled=draft_error is not None, width='stretch', key='analyze_bottom', on_click=request_apply)
     st.caption('US stocks · USD · Daily view\n\nLong only · No leverage or live trading.')
     if st.session_state.source=='demo':
         st.caption(f'Synthetic coverage {DEMO_START}–{DEMO_END}; allow history for MA warm-up.')
     else:
         st.caption('Adjusted daily close · fetches only when you analyze · excludes current New York date.')
 
+if st.session_state.pop('apply_requested', False) and draft_error is None:
+    try:
+        with st.spinner('Loading prices and analyzing your portfolio. Please wait…'):
+            updated=compute(draft, features)
+        st.session_state.active=updated
+        st.session_state.setdefault('progress_by_version', {})[analysis_version(updated)]={'Overview'}
+        st.session_state.update(analysis_error=None, page='Overview', analysis_notice=updated['calculated_at'])
+        dirty=False
+    except ValidationError as exc:
+        st.session_state.analysis_error=str(exc)
+        st.session_state.error_signature=signature
+    except Exception:
+        st.session_state.analysis_error='Could not load prices or finish the analysis. Check your connection and symbols, then retry, or choose Demo.'
+        st.session_state.error_signature=signature
+
 active=st.session_state.active
 config,prices,results=active['config'],active['prices'],active['results']
 visible=prices.loc[config.start:config.end]
-st.session_state.completed=update_progress(st.session_state.completed,st.session_state.page,dirty)
-
-left,middle,right=st.columns([4,2,1.7],vertical_alignment='center')
-with left:
-    st.markdown('<div class="brand"><div class="brand-mark"><svg width="21" height="25" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M9 3h6M10 3v6L5 19a1.5 1.5 0 0 0 1.4 2h11.2A1.5 1.5 0 0 0 19 19L14 9V3M8 15h8"/></svg></div><div><div class="brand-name">Portfolio Lab</div><div class="brand-sub">Stock portfolio strategy lab</div></div></div>',unsafe_allow_html=True)
-with middle:
+version=analysis_version(active)
+progress=st.session_state.setdefault('progress_by_version', {})
+progress.setdefault(version, set(st.session_state.completed) or {'Overview'})
+st.session_state.completed=update_progress(progress[version],st.session_state.page)
+progress[version]=set(st.session_state.completed)
+if st.session_state.get('name_version') != version or 'saved_name_draft' not in st.session_state:
+    st.session_state.saved_name_draft=(active['name'] or f"{' / '.join(config.symbols)} · {config.end}")[:80]
+    st.session_state.name_version=version
+    st.session_state.pop('save_error', None)
+# Preserve the name independently of the conditional dialog/library widget lifecycle.
+st.session_state.experiment_name=st.session_state.saved_name_draft
+if st.session_state.page != 'DCA Planner':
+    with save:
+        st.button('Save experiment…', key='header_save', disabled=dirty,
+                  on_click=show_save, width='stretch', help='Name the applied analysis, then save a snapshot.')
     badge='Synthetic data · Demo' if config.source=='demo' else 'Yahoo · Historical data'
-    st.markdown(f'<span class="source-badge">{badge}</span>',unsafe_allow_html=True)
-with right:
-    st.button('Save experiment',key='header_save',disabled=dirty or st.session_state.analysis_error is not None,
-              on_click=lambda:st.session_state.update(page='Saved experiments'),width='stretch')
-st.divider()
-st.markdown(progress_html(st.session_state.page,st.session_state.completed,dirty),unsafe_allow_html=True)
-st.title(active['name'] or 'My first portfolio')
-st.markdown(f'<div class="context-line"><strong>{" · ".join(escape(s) for s in config.symbols)}</strong><span>Starting capital ${config.capital:,.2f}</span><span>{len(config.symbols)} stocks</span></div>',unsafe_allow_html=True)
-source_note='Synthetic prices · Illustrative results' if config.source=='demo' else 'Adjusted daily closes · Historical simulation'
-st.markdown(f'<div class="context-meta">{visible.index[0]:%Y-%m-%d} → {visible.index[-1]:%Y-%m-%d} &nbsp; · &nbsp; {source_note} &nbsp; · &nbsp; {len(visible)} common trading dates</div>',unsafe_allow_html=True)
+    st.markdown(f'<span class="source-badge">{badge}</span>', unsafe_allow_html=True)
+    st.markdown(progress_html('Overview' if st.session_state.page=='Stock insights' else st.session_state.page,st.session_state.completed),unsafe_allow_html=True)
+    st.title(active['name'] or 'My first portfolio')
+    st.markdown(f'<div class="context-line"><strong>{" · ".join(escape(s) for s in config.symbols)}</strong><span>Starting capital ${config.capital:,.2f}</span><span>{len(config.symbols)} stocks</span></div>',unsafe_allow_html=True)
+    source_note='Synthetic prices · Illustrative results' if config.source=='demo' else 'Adjusted daily closes · Historical simulation'
+    st.markdown(f'<div class="context-meta">{visible.index[0]:%Y-%m-%d} → {visible.index[-1]:%Y-%m-%d} &nbsp; · &nbsp; {source_note} &nbsp; · &nbsp; {len(visible)} common trading dates</div>',unsafe_allow_html=True)
 if dirty:
-    st.warning('Unapplied changes. Charts still show the last applied configuration. Apply & reanalyze before saving.')
+    old_source='Synthetic data (Demo)' if config.source=='demo' else 'Yahoo Historical data'
+    st.warning(f'Unapplied changes. Current charts still use {old_source} and the last applied settings. Apply & reanalyze to update them.')
+    if draft_error:
+        st.error('Cannot apply changes: ' + draft_error + ' Open Edit portfolio to fix this.')
+    st.button('Apply & reanalyze →',key='main_apply',type='primary',disabled=draft_error is not None,on_click=request_apply,width='stretch')
 if st.session_state.analysis_error:
     st.error(st.session_state.analysis_error)
     st.warning('This analysis failed. The last successful results are shown below.')
+if not dirty and not st.session_state.analysis_error and st.session_state.get('analysis_notice')==active['calculated_at']:
+    st.success('Analysis updated. The charts below show your applied portfolio.')
 if storage_error:
     st.warning(storage_error)
 
 with st.container(key='workspace_navigation'):
-    st.radio('Workspace page',PAGES,horizontal=True,key='page',label_visibility='collapsed')
+    st.radio('Workspace page',(*PAGES,'Stock insights','DCA Planner'),horizontal=True,key='page',label_visibility='collapsed')
 page=st.session_state.page
 if page in ('Overview','Risk analysis'):
-    c1,c2=st.columns([2.5,1.4])
-    with c2:
+    with st.container(key='strategy_picker'):
+        if st.session_state.viewed_strategy not in results:st.session_state.viewed_strategy='hold'
         st.session_state.view_choice=st.session_state.viewed_strategy
-        st.selectbox('Viewing strategy',list(STRATEGIES),format_func=STRATEGIES.get,key='view_choice',
+        st.selectbox('Viewing strategy',list(results),format_func=strategy_name,key='view_choice',
             on_change=lambda:st.session_state.update(viewed_strategy=st.session_state.view_choice))
-    if page=='Overview':overview(config,prices,results,st.session_state.viewed_strategy)
-    else:risk_page(config,prices,results,st.session_state.viewed_strategy)
+    if page=='Overview':
+        overview(config,prices,results,st.session_state.viewed_strategy)
+        market_view(active,st.session_state.viewed_strategy)
+        a,b=st.columns(2)
+        a.button('Explore stock insights',on_click=lambda:st.session_state.update(page='Stock insights'),width='stretch')
+        b.button('Use in DCA Planner',on_click=navigate_from_portfolio,args=(config,),width='stretch')
+    else:
+        market_view(active,st.session_state.viewed_strategy,risk=True)
+        risk_page(config,prices,results,st.session_state.viewed_strategy)
 elif page=='Strategy comparison':
     strategy_page(config,prices,results)
-else:
-    experiment_page(active,store,dirty or st.session_state.analysis_error is not None)
+    if active.get('features',{}).get('macd_enabled'):
+        st.caption('Parameter selection: '+active['features']['selection_note'])
+        st.caption('MACD scope: '+', '.join(active['features']['scope'] or config.symbols))
+elif page=='Stock insights':
+    stock_insights_page(active)
+elif page=='DCA Planner':
+    planner_page(active)
+elif page=='Saved experiments':
+    experiment_page(active,store,dirty,show_form=not st.session_state.get('show_save',False))
+
+@st.dialog('Save experiment', on_dismiss=lambda: st.session_state.update(show_save=False))
+def save_dialog():
+    save_panel(active, store, dirty, view_saved)
+
+
+if st.session_state.get('show_save'):
+    save_dialog()
 
 with st.expander('Methodology & data details'):
     method_page()

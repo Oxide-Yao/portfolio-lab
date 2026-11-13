@@ -19,6 +19,8 @@ class StrategyResult:
     equity: pd.Series
     trades: pd.DataFrame
     metrics: dict
+    cash: pd.DataFrame | None = None
+    holdings: pd.DataFrame | None = None
 
 
 def risk_metrics(equity: pd.Series, initial: float) -> dict:
@@ -45,10 +47,13 @@ def run_strategy(prices: pd.DataFrame, config: AnalysisConfig, kind: str) -> Str
     return _run_validated_strategy(validate_prices(prices, config), config, kind)
 
 
-def _run_validated_strategy(prices: pd.DataFrame, config: AnalysisConfig, kind: str) -> StrategyResult:
+def _run_validated_strategy(prices: pd.DataFrame, config: AnalysisConfig, kind: str,
+                            entries=None, exits=None) -> StrategyResult:
     displayed = prices.loc[config.start:config.end]
     portfolio = pd.Series(0.0, index=displayed.index, name=kind)
     events = []
+    cash_history = pd.DataFrame(0.0, index=displayed.index, columns=config.symbols)
+    holdings = cash_history.copy()
     open_count = 0
     # Normalize the tiny tolerated weight error so that allocated cash equals capital.
     allocations = np.asarray(config.weights, dtype=float) / sum(config.weights) * config.capital
@@ -87,7 +92,16 @@ def _run_validated_strategy(prices: pd.DataFrame, config: AnalysisConfig, kind: 
                     shares = 0.0
                 pending = None
             portfolio.at[day] += cash + shares * price
-            if kind != "hold":
+            cash_history.at[day, symbol] = cash
+            holdings.at[day, symbol] = shares
+            if entries is not None:
+                # Explicit crossover strategy: exits override entries. Existing
+                # take-profit/stop/holding rules only apply to the original kinds.
+                if shares > 0 and bool(exits.at[day, symbol]):
+                    pending = ("sell", day, f"{kind} downward crossover")
+                elif shares == 0 and cash > 0 and bool(entries.at[day, symbol]):
+                    pending = ("buy", day, f"{kind} upward crossover")
+            elif kind != "hold":
                 if shares > 0:
                     gain = price / entry - 1
                     reason = None
@@ -107,7 +121,28 @@ def _run_validated_strategy(prices: pd.DataFrame, config: AnalysisConfig, kind: 
     metrics = risk_metrics(portfolio, config.capital)
     metrics.update(completed_trades=int((trades["side"] == "sell").sum()),
                    open_positions=open_count, fees=float(trades["fee"].sum()))
-    return StrategyResult(portfolio, trades, metrics)
+    return StrategyResult(portfolio, trades, metrics, cash_history, holdings)
+
+
+def run_signal_strategy(prices, config, entries, exits, name="MACD"):
+    """Pure execution of boolean close signals on the next common close.
+
+    Unallocated/non-selected sleeves stay in cash. No shorting, forced final
+    liquidation or cross-sleeve cash reuse. Signal generation is separate.
+    """
+    if not isinstance(name, str) or not name.strip() or name in STRATEGIES:
+        raise ValidationError("Use a distinct non-empty name for an explicit signal strategy.")
+    config.validate()
+    prices = validate_prices(prices, config)
+    dates = prices.loc[config.start:config.end].index
+    for signals in (entries, exits):
+        if (not isinstance(signals, pd.DataFrame) or not signals.index.equals(dates)
+                or list(signals.columns) != list(config.symbols)
+                or any(dtype != bool for dtype in signals.dtypes)):
+            raise ValidationError("Signals must be complete boolean frames matching the analysis dates and symbols.")
+    if (entries & exits).any().any():
+        raise ValidationError("Entry and exit cannot both occur on the same date.")
+    return _run_validated_strategy(prices, config, name, entries, exits)
 
 
 def analyze(prices: pd.DataFrame, config: AnalysisConfig) -> dict[str, StrategyResult]:

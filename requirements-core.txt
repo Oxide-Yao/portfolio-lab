@@ -1,0 +1,5 @@
+# Offline analysis and verification only. Streamlit is not required.
+numpy>=1.26,<3
+pandas>=2.2,<3
+pytest>=8,<9
+# Optional online adapter: install yfinance separately for Yahoo downloads.

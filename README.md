@@ -1,5 +1,7 @@
 # Portfolio Lab
 
+**Website integration release:** independent analytics, benchmark comparison, stock insights, optional MACD strategies and the DCA/VA planner are now connected to Streamlit. See [WEBSITE_RELEASE.md](WEBSITE_RELEASE.md) for supported features and limits, and [CORE_FEATURES.md](CORE_FEATURES.md) for standalone calculation contracts.
+
 An English-language stock portfolio strategy workbench built with Python, Streamlit, pandas, NumPy, Plotly, yfinance and SQLite. US equities, USD, daily adjusted closing prices, 1–20 stocks, fractional shares, no leverage or live trading.
 
 ## Start locally
@@ -37,9 +39,9 @@ Edit stock symbols, then click **Update list** to validate them and reset an equ
 
 **Equal weight** splits the percentages in Weight mode. **Equal amounts** preserves the current amount total and divides it in Amount mode; any leftover cents go to the largest fractional remainders, breaking ties by stock order. Amount and capital edits round to cents. Converting weights to amounts also distributes whole cents while retaining the total budget, so an allocation can change by less than one cent from its ideal fractional amount. The new effective allocation is shown as an unapplied change when needed. Complete invalid inputs before switching modes. Opening a saved snapshot restores its exact original configuration in Weight mode; converting it to Amount mode then follows the same cent rule. Amounts are initial allocation budgets for historical simulation, not imported holdings, share quantities or current market values.
 
-Invalid drafts disable analysis. Changing the sidebar keeps the last applied results visible until **Apply & reanalyze** succeeds. The header always describes displayed results. Saving is disabled while edits are unapplied or the latest analysis has failed. The header **Save experiment** opens the archive page; provide a name and click **Save snapshot** there.
+Invalid drafts disable analysis. Editing the portfolio keeps the last applied results visible until **Apply & reanalyze** succeeds. The header always describes displayed results. Saving is disabled while edits are unapplied or the latest analysis has failed. The header **Save experiment…** opens the naming dialog directly, with an editable default name. In session mode, select **Save to this session**; success shows the saved name, **Download JSON** and **View saved experiments**. Failed saves retain the entered name.
 
-Workflow highlights track the current page independently of completion checkmarks. Visiting Risk analysis and Strategy comparison marks those steps as viewed; successfully saving checks the last step. Returning to Overview preserves checks and highlights Configure portfolio. These checks describe app navigation, not scientific acceptance or human approval. Any configuration edit invalidates progress. Switching pages or viewing strategies retains settings and results; opening a saved record restores its exact snapshot without downloading data.
+Workflow highlights track the current page independently of completion checkmarks. Visiting Risk analysis and Strategy comparison marks those steps as viewed; successfully saving checks the last step. Returning to Overview preserves checks and highlights Configure portfolio. These checks describe app navigation, not scientific acceptance or human approval. Completion is associated with the applied analysis version. Editing a draft preserves the previous results and checks; restoring the exact applied configuration clears the pending state automatically. A successful new analysis starts new progress; failed analysis preserves the previous version. Visiting Saved experiments alone never completes saving. Switching pages or viewing strategies retains settings and results; opening a saved record restores its exact snapshot without downloading data.
 
 ## Data and execution conventions
 
@@ -67,7 +69,7 @@ python -m pytest -q
 python -m pip check
 ```
 
-Phase 3 verification on 2026-11-13: **124 tests passed, 0 failures/errors/skips**, with deprecation and future warnings treated as errors. This preserves all 106 Phase 2 non-UI cases, updates and extends the original 8 UI cases to 15, and adds 3 chart/export/import contract cases. Core calculations, price validation and data acquisition semantics are unchanged from Phase 2. Test outputs, browser screenshots, download verification and review status are in the separate `pd2_phase3` evidence pack.
+UI workflow verification on 2026-11-13: **148 tests passed**. This includes version-specific completion, draft reversal, failed-analysis preservation, inline validation, direct save naming, retained names on save failure, applied data-source labels, and existing calculation/storage tests. Browser checks covered 390px Overview/editor/comparison/save and lightweight comparison-width checks at 320, 768 and 1440px. Browser-downloaded JSON passed validated replay and restoration. See the adjacent DELIVERY.md and evidence directory for scope and limits.
 
 Phase 2 verification on 2026-11-13 passed 114 tests and `pip check`. Its 27 core-boundary and 9 CSV-adapter cases remain in this run. The core calculates successfully in a fresh process where importing Streamlit, yfinance and Plotly is blocked. Price validation rejects boolean/complex values, the standalone strategy entry point validates its inputs, and risk calculations reject invalid capital or equity.
 
@@ -105,7 +107,7 @@ Browser checks to repeat after UI changes:
 2. In Risk analysis, check drawdown and correlations. In Strategy comparison, check three distinct curves, the legend, currency axes, trade markers, table formats and CSV download.
 3. Enter weights `10, 10, 10`; confirm the unapplied-changes notice, validation error and disabled analysis/save buttons. Restore `40, 35, 25` and analyze again.
 4. Save two named experiments, compare them, open one, export JSON and import it; confirm its exact snapshot and settings are restored. Try malformed JSON and an oversized file.
-5. At a narrow browser width, confirm cards stack, the sidebar can be reopened and all buttons remain reachable.
+5. At a narrow browser width, confirm cards stack, Edit portfolio is visible and the editor can be reopened and all buttons remain reachable.
 
 ## GitHub and Streamlit Community Cloud
 
@@ -122,7 +124,7 @@ Deployment reference: Streamlit's official documentation, “Prep and deploy you
 ## File map
 
 ```text
-app.py                 App state, draft/applied settings, sidebar and navigation
+app.py                 App state, draft/applied settings, portfolio editor and navigation
 allocation.py          Amount/weight conversion and exact-cent budget allocation
 workflow.py            Current step and independent completion checks
 experiments.py         Save, restore, compare, import/export and removal workflows

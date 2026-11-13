@@ -1,4 +1,5 @@
 """Experiment workflow using the verified snapshot schema and isolated storage."""
+import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -7,6 +8,7 @@ import streamlit as st
 
 from storage import export_records, import_records, make_record, restore_record
 from ui import comparison_table
+from workflow import analysis_version
 
 
 def save_batch(records, store, session_records):
@@ -24,29 +26,67 @@ def import_batch(raw, store, session_records):
     return len(records)
 
 
-def experiment_page(active, store, blocked):
+def make_active_record(name, active):
+    record=make_record(name,active['config'],active['prices'],active['results'],active['notes'],active['calculated_at'])
+    if 'features' in active:
+        from website_features import snapshot_for
+        record.update(version=2, research=json.loads(snapshot_for(active)))
+    return record
+
+
+def save_panel(active, store, blocked, view_saved=None):
+    """One naming/save flow shared by the direct dialog and the library page."""
     config,prices,results=active['config'],active['prices'],active['results']
     if store:
-        st.caption('Local single-user storage · survives restarts · use session mode for public hosting.')
+        st.info('Save to local storage on this computer. Records survive restarts. Download JSON for a portable backup.')
     else:
-        st.info('Your records are private to this browser session and may be lost after a refresh, disconnect or restart. Download JSON to keep them. Permanent cloud storage is not provided.')
-    if 'experiment_notice' in st.session_state:
-        st.success(st.session_state.pop('experiment_notice'))
-    st.subheader('Save a reproducible experiment')
-    st.caption('Each snapshot keeps the applied configuration, prices, all three strategies and every execution. Unapplied edits are excluded.')
-    name=st.text_input('Experiment name',placeholder='e.g. MA50/200 · 8% stop · first study',max_chars=80,key='experiment_name')
-    if st.button('Save snapshot',type='primary',disabled=blocked,key='save_snapshot'):
+        st.info('Save to this browser session only. Records may be lost after a refresh, disconnect or restart. Download JSON to keep and restore your experiment. Permanent cloud storage is not provided.')
+    st.caption('The snapshot includes applied settings, price and benchmark snapshots, indicators, all enabled strategies and every execution.')
+    def name_changed():
+        st.session_state.saved_name_draft=st.session_state.experiment_name
+    st.text_input('Experiment name',max_chars=80,key='experiment_name',on_change=name_changed)
+    if blocked:
+        st.warning('Apply your changes first, or restore the applied settings before saving.')
+    if st.button('Save to local storage' if store else 'Save to this session',type='primary',disabled=blocked,key='save_snapshot'):
         try:
-            record=make_record(name,config,prices,results,active['notes'],active['calculated_at'])
+            record=make_active_record(st.session_state.experiment_name,active)
             save_batch([record],store,st.session_state.session_records)
-            st.session_state.completed=set(st.session_state.completed)|{'Saved experiments'}
-            st.session_state.experiment_notice='Experiment saved with its settings, price snapshot and full results.'
+            version=analysis_version(active)
+            st.session_state.progress_by_version[version].add('Saved experiments')
+            st.session_state.completed=set(st.session_state.progress_by_version[version])
+            st.session_state.last_saved={'version':version, 'record':record}
+            st.session_state.pop('save_error',None)
             st.rerun()
         except ValueError as exc:
-            st.error(str(exc))
+            st.session_state.save_error='Save failed: '+str(exc)
+        except OSError as exc:
+            st.session_state.save_error='Save failed: '+str(exc)+'. Check local storage access and retry.'
         except Exception:
-            st.error('Save failed. Check storage access; the displayed analysis can still be exported.')
-    current=make_record('Current analysis',config,prices,results,active['notes'],active['calculated_at'])
+            st.session_state.save_error='Save failed: storage could not accept the snapshot. Retry, or download the applied analysis from Saved experiments.'
+    if st.session_state.get('save_error'):
+        st.error(st.session_state.save_error)
+    saved=st.session_state.get('last_saved')
+    if saved and saved['version']==analysis_version(active):
+        record=saved['record']
+        st.success(f'Saved “{record["name"]}”'+(' to local storage.' if store else ' to this session.'))
+        st.download_button('Download JSON',export_records([record]),file_name=f'portfolio-lab-{record["id"][:8]}.json',
+                           mime='application/json',type='primary',width='stretch')
+        def default_view():
+            st.session_state.update(page='Saved experiments',show_save=False)
+        if st.button('View saved experiments',on_click=view_saved or default_view,width='stretch'):
+            # A dialog normally reruns only its fragment. Navigation must close
+            # the dialog and render the destination in the full application.
+            st.rerun(scope='app')
+
+
+def experiment_page(active, store, blocked, show_form=True):
+    config,prices,results=active['config'],active['prices'],active['results']
+    if 'experiment_notice' in st.session_state:
+        st.success(st.session_state.pop('experiment_notice'))
+    if show_form:
+        st.subheader('Save a reproducible experiment')
+        save_panel(active,store,blocked)
+    current=make_active_record('Current analysis',active)
     st.download_button('Export applied analysis · JSON',export_records([current]),file_name='portfolio-lab-current.json',mime='application/json')
     st.caption('This download contains the displayed, applied results even if draft settings have changed.')
     try:
@@ -63,6 +103,7 @@ def experiment_page(active, store, blocked):
         rows=[{'Experiment':r['name'],'Saved (HKT)':datetime.fromisoformat(r['created_at']).astimezone(ZoneInfo('Asia/Hong_Kong')).strftime('%Y-%m-%d %H:%M'),
                'Source':'Synthetic demo' if r['config']['source']=='demo' else 'Yahoo history',
                'Stocks':', '.join(r['config']['symbols']),'Capital (USD)':r['config']['capital']} for r in records]
+        st.caption('Swipe or scroll the table horizontally → · Use the table fullscreen control for more room.')
         st.dataframe(pd.DataFrame(rows).style.format({'Capital (USD)':'${:,.2f}'}),hide_index=True,width='stretch')
         by_id={r['id']:r for r in records}
         label=lambda rid:by_id[rid]['name']+' · '+rid[:8]
