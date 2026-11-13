@@ -209,3 +209,139 @@ def test_confirmed_removal_preserves_active_analysis(app):
     assert app.session_state.session_records=={}
     assert app.session_state.active['calculated_at']==before
     assert any('removed' in x.value for x in app.success)
+
+
+def amount_mode(app):
+    app.radio(key='allocation_mode').set_value('amount').run()
+    assert not app.exception,[e.message for e in app.exception]
+
+
+def test_amount_inputs_drive_applied_config_without_early_recalculation(app):
+    before=app.session_state.active['calculated_at']
+    amount_mode(app)
+    assert app.number_input(key='capital').disabled
+    for symbol,value in [('AAPL',10000.),('MSFT',20000.),('GOOGL',30000.)]:
+        app.number_input(key='amount_'+symbol).set_value(value).run()
+    assert not app.exception
+    assert app.number_input(key='capital').value==60000.
+    assert app.session_state.active['calculated_at']==before
+    assert app.button(key='header_save').disabled
+    assert any('Unapplied changes' in x.value for x in app.warning)
+    click(app,key='analyze')
+    config=app.session_state.active['config']
+    assert config.capital==60000.
+    assert config.weights==pytest.approx((100/6,100/3,50.))
+    assert not app.button(key='header_save').disabled
+
+
+def test_amounts_survive_mode_and_page_switches_and_capital_scaling(app):
+    amount_mode(app)
+    app.number_input(key='amount_AAPL').set_value(12000.).run()
+    page(app,'Risk analysis');page(app,'Overview')
+    for _ in range(3):
+        app.radio(key='allocation_mode').set_value('weight').run()
+        assert app.number_input(key='capital').value==72000.
+        assert not app.number_input(key='capital').disabled
+        assert app.number_input(key='weight_AAPL').value==pytest.approx(100/6)
+        amount_mode(app)
+        assert app.number_input(key='amount_AAPL').value==12000.
+        assert app.number_input(key='amount_MSFT').value==35000.
+    app.radio(key='allocation_mode').set_value('weight').run()
+    app.number_input(key='capital').set_value(144000.).run()
+    amount_mode(app)
+    assert [app.number_input(key='amount_'+s).value for s in ('AAPL','MSFT','GOOGL')]==[24000.,70000.,50000.]
+
+
+def test_blank_zero_and_oversized_amounts_block_apply_without_crashing(app):
+    amount_mode(app)
+    before=app.session_state.active['calculated_at']
+    app.number_input(key='amount_AAPL').set_value(None).run()
+    assert not app.exception
+    assert app.number_input(key='amount_AAPL').value is None
+    assert app.button(key='analyze').disabled
+    assert any('Enter every stock amount' in x.value for x in app.error)
+    app.radio(key='allocation_mode').set_value('weight').run()
+    assert app.radio(key='allocation_mode').value=='amount'
+    for s in ('AAPL','MSFT','GOOGL'):
+        app.number_input(key='amount_'+s).set_value(0.).run()
+    assert not app.exception
+    assert app.number_input(key='capital').value==0.
+    assert app.button(key='analyze').disabled
+    app.number_input(key='amount_AAPL').set_value(1e12).run()
+    app.number_input(key='amount_MSFT').set_value(1e12).run()
+    assert not app.exception
+    assert app.number_input(key='capital').value==2e12
+    assert app.button(key='analyze').disabled
+    assert any('1 trillion' in x.value for x in app.error)
+    assert app.session_state.active['calculated_at']==before
+
+
+def test_amount_equal_split_and_stock_update_preserve_total(app):
+    amount_mode(app)
+    click(app,'Equal amounts')
+    assert [app.number_input(key='amount_'+s).value for s in ('AAPL','MSFT','GOOGL')]==[33333.34,33333.33,33333.33]
+    assert app.number_input(key='capital').value==100000.
+    click(app,key='analyze')
+    assert sum(app.session_state.active['config'].weights)==pytest.approx(100.)
+    app.text_input(key='symbols').set_value('AAPL, NVDA').run()
+    click(app,'Update list')
+    assert app.number_input(key='amount_AAPL').value==50000.
+    assert app.number_input(key='amount_NVDA').value==50000.
+    click(app,key='analyze')
+    assert app.session_state.active['config'].symbols==('AAPL','NVDA')
+    assert app.session_state.active['config'].capital==100000.
+
+
+def test_amount_snapshot_restores_exact_config_and_then_converts_back(app):
+    amount_mode(app)
+    app.number_input(key='amount_AAPL').set_value(12345.67).run()
+    app.number_input(key='amount_MSFT').set_value(0.).run()
+    click(app,key='analyze')
+    saved_config=app.session_state.active['config']
+    save(app,'Amount allocation')
+    app.number_input(key='amount_AAPL').set_value(20000.).run()
+    click(app,'Open full results')
+    assert app.radio(key='allocation_mode').value=='weight'
+    assert app.session_state.active['config']==saved_config
+    assert not any('Unapplied' in x.value for x in app.warning)
+    amount_mode(app)
+    assert app.number_input(key='amount_AAPL').value==12345.67
+    assert app.number_input(key='amount_MSFT').value==0.
+    assert app.number_input(key='amount_GOOGL').value==25000.
+
+
+def test_invalid_weight_or_empty_capital_cannot_be_hidden_by_mode_switch(app):
+    app.number_input(key='weight_AAPL').set_value(None).run()
+    assert not app.exception
+    assert app.button(key='analyze').disabled
+    amount_mode(app)
+    assert app.radio(key='allocation_mode').value=='weight'
+    click(app,'Equal weight')
+    app.number_input(key='capital').set_value(None).run()
+    assert not app.exception
+    assert app.button(key='analyze').disabled
+    app.number_input(key='capital').set_value(100000.).run()
+    amount_mode(app)
+    assert app.number_input(key='capital').value==100000.
+
+
+def test_money_entry_rounds_cents_before_deriving_weights(app):
+    amount_mode(app)
+    app.number_input(key='amount_AAPL').set_value(1.005).run()
+    assert app.number_input(key='amount_AAPL').value==1.01
+    assert app.number_input(key='capital').value==60001.01
+    click(app,key='analyze')
+    config=app.session_state.active['config']
+    assert config.capital*config.weights[0]/100==pytest.approx(1.01)
+
+
+def test_hot_reload_migrates_existing_draft_with_a_changed_stock_list(app):
+    app.text_input(key='symbols').set_value('AAPL, MSFT, GOOGL, NVDA').run()
+    click(app,'Update list')
+    del app.session_state['allocation_draft']
+    app.run()
+    assert not app.exception
+    assert len(app.session_state.allocation_draft['weights'])==4
+    assert app.number_input(key='weight_NVDA').value==25.
+    amount_mode(app)
+    assert app.number_input(key='amount_NVDA').value==25000.

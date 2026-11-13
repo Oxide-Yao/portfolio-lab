@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 import streamlit as st
 
+from allocation import MAX_CAPITAL, amount_total, amounts_from_weights, money, resolve_allocation
 from experiments import experiment_page
 from market_data import DEMO_END, DEMO_START, load_prices
 from models import AnalysisConfig, ValidationError, parse_inputs
@@ -30,9 +31,44 @@ def set_draft(config):
         capital=float(config.capital), start=date.fromisoformat(config.start), end=date.fromisoformat(config.end),
         source=config.source, short=config.short_window, long=config.long_window,
         take_profit=config.take_profit * 100, stop_loss=config.stop_loss * 100,
-        hold_days=config.max_hold_days, fee=config.fee * 100, symbol_error=None)
-    for symbol, weight in zip(config.symbols, config.weights):
-        st.session_state['weight_' + symbol] = float(weight)
+        hold_days=config.max_hold_days, fee=config.fee * 100, symbol_error=None,
+        allocation_mode='weight', allocation_switch_error=None,
+        allocation_draft={'mode':'weight', 'capital':float(config.capital),
+            'weights':list(config.weights),
+            'amounts':list(amounts_from_weights(config.capital, config.weights))})
+
+
+def allocation_edited(kind, index=None):
+    allocation = st.session_state.allocation_draft
+    if kind == 'capital':
+        allocation['capital'] = money(st.session_state.capital)
+        st.session_state.capital = allocation['capital']
+    else:
+        symbol = st.session_state.configured_symbols[index]
+        value = st.session_state[kind + '_' + symbol]
+        if kind == 'amount':
+            value = money(value)
+            st.session_state['amount_' + symbol] = value
+        allocation[kind + 's'][index] = value
+    st.session_state.allocation_switch_error = None
+
+
+def allocation_mode_changed():
+    allocation = st.session_state.allocation_draft
+    old_mode, new_mode = allocation['mode'], st.session_state.allocation_mode
+    try:
+        capital, weights = resolve_allocation(old_mode, allocation[old_mode + 's'], allocation['capital'])
+    except ValidationError as exc:
+        st.session_state.allocation_mode = old_mode
+        st.session_state.allocation_switch_error = 'Complete the current allocation before switching modes. ' + str(exc)
+        return
+    if new_mode == 'amount':
+        allocation['amounts'] = list(amounts_from_weights(capital, weights))
+    else:
+        allocation['weights'] = list(weights)
+        allocation['capital'] = capital
+    allocation['mode'] = new_mode
+    st.session_state.allocation_switch_error = None
 
 
 def update_symbols():
@@ -42,16 +78,24 @@ def update_symbols():
         AnalysisConfig(symbols=symbols, weights=weights).validate()
         st.session_state.configured_symbols = symbols
         st.session_state.symbols = ', '.join(symbols)
-        for symbol, weight in zip(symbols, weights):
-            st.session_state['weight_' + symbol] = weight
+        allocation = st.session_state.allocation_draft
+        allocation['weights'] = list(weights)
+        total = amount_total(allocation['amounts']) if allocation['mode'] == 'amount' else allocation['capital']
+        allocation['amounts'] = list(amounts_from_weights(total or 0, weights))
+        st.session_state.allocation_switch_error = None
         st.session_state.symbol_error = None
     except ValidationError as exc:
         st.session_state.symbol_error = str(exc)
 
 
-def equal_weights():
-    for symbol in st.session_state.configured_symbols:
-        st.session_state['weight_' + symbol] = 100 / len(st.session_state.configured_symbols)
+def equal_allocation():
+    allocation = st.session_state.allocation_draft
+    count = len(st.session_state.configured_symbols)
+    if allocation['mode'] == 'amount':
+        allocation['amounts'] = list(amounts_from_weights(amount_total(allocation['amounts']), [1] * count))
+    else:
+        allocation['weights'] = [100 / count] * count
+    st.session_state.allocation_switch_error = None
 
 
 if 'initialized' not in st.session_state:
@@ -60,6 +104,16 @@ if 'initialized' not in st.session_state:
         completed={'Overview'}, viewed_strategy='hold', last_draft_signature=None)
     # A reproducible offline example is calculated once; page navigation does not fetch prices.
     st.session_state.active = compute(AnalysisConfig())
+
+# Keep existing browser sessions usable after this version is deployed.
+if 'allocation_draft' not in st.session_state:
+    config = st.session_state.active['config']
+    previous_weights = dict(zip(config.symbols, config.weights))
+    weights = [st.session_state.get('weight_' + s, previous_weights.get(s, 100 / len(st.session_state.configured_symbols)))
+               for s in st.session_state.configured_symbols]
+    st.session_state.update(allocation_mode='weight', allocation_switch_error=None,
+        allocation_draft={'mode':'weight', 'capital':st.session_state.capital,
+            'weights':weights, 'amounts':[0.] * len(weights)})
 
 if 'pending_record' in st.session_state:
     record = st.session_state.pop('pending_record')
@@ -81,24 +135,59 @@ if os.environ.get('PORTFOLIO_STORAGE', 'session') == 'sqlite':
 with st.sidebar:
     st.markdown('<div class="sidebar-heading">Build your portfolio <span class="sidebar-step">STEP 01</span></div>', unsafe_allow_html=True)
     st.selectbox('Data source', ['demo','yahoo'], format_func=lambda x: {'demo':'Demo · synthetic prices','yahoo':'Yahoo · historical prices'}[x], key='source')
-    st.text_input('Stock symbols · up to 20', key='symbols', help='Separate unique US stock symbols with commas. Click Update list before editing their weights.')
+    st.text_input('Stock symbols · up to 20', key='symbols', help='Separate unique US stock symbols with commas. Click Update list to reset an equal allocation across the validated stocks.')
     st.button('Update list', on_click=update_symbols, width='stretch')
     if st.session_state.symbol_error:
         st.error(st.session_state.symbol_error)
+    allocation = st.session_state.allocation_draft
+    st.radio('Enter allocation by', ['weight','amount'], key='allocation_mode', horizontal=True,
+             format_func=lambda mode: {'weight':'Weight (%)','amount':'Amount (USD)'}[mode],
+             on_change=allocation_mode_changed)
+    mode = allocation['mode']
+    amount_mode = mode == 'amount'
+    if st.session_state.allocation_switch_error:
+        st.warning(st.session_state.allocation_switch_error)
+    st.caption('Enter amounts. Weights and starting capital update automatically.' if amount_mode
+               else 'Enter weights and starting capital. Amounts update automatically.')
+    allocation_error = None
+    capital = amount_total(allocation['amounts']) if amount_mode else allocation['capital']
+    try:
+        capital, weights = resolve_allocation(mode, allocation[mode + 's'], capital)
+        amounts = tuple(allocation['amounts']) if amount_mode else amounts_from_weights(capital, weights)
+    except ValidationError as exc:
+        allocation_error = str(exc)
+        weights, amounts = (None,) * len(st.session_state.configured_symbols), (None,) * len(st.session_state.configured_symbols)
     st.markdown('<div class="holding-header"><span>Stock</span><span>Weight %</span><span>Amount $</span></div>', unsafe_allow_html=True)
     with st.container(key='holdings_rows'):
-        for symbol in st.session_state.configured_symbols:
-            c1,c2,c3 = st.columns([1,1.15,1.05], gap='small')
+        for index, symbol in enumerate(st.session_state.configured_symbols):
+            c1,c2,c3 = st.columns([.8,1,1.4], gap='small')
             c1.markdown(f'<div class="holding-label">{escape(symbol)}</div>', unsafe_allow_html=True)
-            c2.number_input(f'{symbol} weight (%)', min_value=0., max_value=100., step=1., format='%.2f',
-                            key='weight_'+symbol, label_visibility='collapsed')
-            amount=st.session_state.capital * st.session_state['weight_'+symbol] / 100
-            c3.markdown(f'<div class="holding-amount">{amount:,.0f}</div>', unsafe_allow_html=True)
-    total=sum(st.session_state['weight_'+s] for s in st.session_state.configured_symbols)
+            if amount_mode:
+                weight_text = '—' if weights[index] is None else f'{weights[index]:.2f}'
+                c2.markdown(f'<div class="holding-amount">{weight_text}</div>', unsafe_allow_html=True)
+                st.session_state['amount_' + symbol] = allocation['amounts'][index]
+                c3.number_input(f'{symbol} amount (USD)', min_value=0., max_value=MAX_CAPITAL, value=None, step=100., format='%.2f',
+                                key='amount_'+symbol, label_visibility='collapsed', on_change=allocation_edited, args=('amount',index))
+            else:
+                st.session_state['weight_' + symbol] = allocation['weights'][index]
+                c2.number_input(f'{symbol} weight (%)', min_value=0., max_value=100., value=None, step=1., format='%.2f',
+                                key='weight_'+symbol, label_visibility='collapsed', on_change=allocation_edited, args=('weight',index))
+                amount_text = '—' if amounts[index] is None else f'{amounts[index]:,.2f}'
+                c3.markdown(f'<div class="holding-amount">{amount_text}</div>', unsafe_allow_html=True)
     c1,c2=st.columns([1,1])
-    c1.caption(f'Total {total:.2f}%')
-    c2.button('Equal weight', on_click=equal_weights, width='stretch')
-    st.number_input('Starting capital · USD', 1., 1_000_000_000_000., step=1000., format='%.2f', key='capital')
+    if amount_mode:
+        c1.caption(f'Total ${capital:,.2f}' + (' · 100%' if not allocation_error else ' · Incomplete'))
+    else:
+        c1.caption(f'Total {sum(w for w in allocation["weights"] if w is not None):.2f}%')
+    c2.button('Equal amounts' if amount_mode else 'Equal weight', on_click=equal_allocation, width='stretch')
+    if amount_mode:
+        st.markdown('<div class="capital-label">Starting capital · USD <span>Calculated</span></div>', unsafe_allow_html=True)
+    st.session_state.capital = capital
+    st.number_input('Starting capital · USD', min_value=0., max_value=None if amount_mode else MAX_CAPITAL, value=None, step=1000., format='%.2f', key='capital',
+                    disabled=amount_mode, label_visibility='collapsed' if amount_mode else 'visible',
+                    on_change=allocation_edited, args=('capital',))
+    st.caption('Sum of allocation amounts. Amounts use cents; derived weights retain full precision.' if amount_mode
+               else 'Budget to allocate across the selected stocks. Amounts are rounded to cents.')
     st.date_input('Start date', min_value=date(1990,1,1), max_value=date(2100,1,1), key='start')
     st.date_input('End date', min_value=date(1990,1,1), max_value=date(2100,1,1), key='end')
     with st.expander('Strategy settings & fees'):
@@ -111,19 +200,21 @@ with st.sidebar:
 
     draft, draft_error = None, None
     try:
+        if allocation_error:
+            raise ValidationError(allocation_error)
         entered=tuple(s.strip().upper() for s in st.session_state.symbols.replace('，',',').split(','))
         if entered != st.session_state.configured_symbols:
-            raise ValidationError('Stock list changed. Click Update list to validate stocks and reset equal weights.')
+            raise ValidationError('Stock list changed. Click Update list to validate stocks and reset an equal allocation.')
         draft=parse_inputs(','.join(st.session_state.configured_symbols),
-            ','.join(str(st.session_state['weight_'+s]) for s in st.session_state.configured_symbols),
-            capital=st.session_state.capital,start=st.session_state.start.isoformat(),end=st.session_state.end.isoformat(),
+            ','.join(str(w) for w in weights),
+            capital=capital,start=st.session_state.start.isoformat(),end=st.session_state.end.isoformat(),
             source=st.session_state.source,short_window=st.session_state.short,long_window=st.session_state.long,
             take_profit=st.session_state.take_profit/100,stop_loss=st.session_state.stop_loss/100,
             max_hold_days=st.session_state.hold_days,fee=st.session_state.fee/100)
     except ValidationError as exc:
         draft_error=str(exc)
     signature=json.dumps({'symbols':st.session_state.symbols,'configured':st.session_state.configured_symbols,
-        'weights':[st.session_state['weight_'+s] for s in st.session_state.configured_symbols],
+        'weights':weights, 'allocation_values':allocation[mode + 's'] if allocation_error else None,
         **{k:str(st.session_state[k]) for k in ('capital','start','end','source','short','long','take_profit','stop_loss','hold_days','fee')}},sort_keys=True)
     changed=st.session_state.last_draft_signature is not None and signature != st.session_state.last_draft_signature
     st.session_state.last_draft_signature=signature

@@ -33,7 +33,11 @@ The default analysis uses reproducible synthetic prices and works offline. No AP
 
 The blue-and-white layout adapts the supplied Portfolio Lab HTML template to native Streamlit controls and Plotly charts. Template-only monthly rebalancing and benchmark mock values are replaced by the Phase 2 verified strategies. The app uses a light theme, serif headings and distinct solid/dashed/dotted strategy curves.
 
-Edit stock symbols, then click **Update list** to validate them and reset equal weights. Each stock has a weight field and allocation amount; **Equal weight** is available at any time. Invalid drafts disable analysis. Changing the sidebar keeps the last applied results visible until **Apply & reanalyze** succeeds. The header always describes displayed results. Saving is disabled while edits are unapplied or the latest analysis has failed. The header **Save experiment** opens the archive page; provide a name and click **Save snapshot** there.
+Edit stock symbols, then click **Update list** to validate them and reset an equal allocation. Choose **Weight (%)** to enter weights and starting capital, or **Amount (USD)** to enter each stock's allocation amount. Amount mode calculates starting capital as the sum of amounts, displays it as read-only, and derives full-precision weights. Empty entries require completion; enter zero for no allocation. The total amount must be above zero and at most USD 1 trillion.
+
+**Equal weight** splits the percentages in Weight mode. **Equal amounts** preserves the current amount total and divides it in Amount mode; any leftover cents go to the largest fractional remainders, breaking ties by stock order. Amount and capital edits round to cents. Converting weights to amounts also distributes whole cents while retaining the total budget, so an allocation can change by less than one cent from its ideal fractional amount. The new effective allocation is shown as an unapplied change when needed. Complete invalid inputs before switching modes. Opening a saved snapshot restores its exact original configuration in Weight mode; converting it to Amount mode then follows the same cent rule. Amounts are initial allocation budgets for historical simulation, not imported holdings, share quantities or current market values.
+
+Invalid drafts disable analysis. Changing the sidebar keeps the last applied results visible until **Apply & reanalyze** succeeds. The header always describes displayed results. Saving is disabled while edits are unapplied or the latest analysis has failed. The header **Save experiment** opens the archive page; provide a name and click **Save snapshot** there.
 
 Workflow highlights track the current page independently of completion checkmarks. Visiting Risk analysis and Strategy comparison marks those steps as viewed; successfully saving checks the last step. Returning to Overview preserves checks and highlights Configure portfolio. These checks describe app navigation, not scientific acceptance or human approval. Any configuration edit invalidates progress. Switching pages or viewing strategies retains settings and results; opening a saved record restores its exact snapshot without downloading data.
 
@@ -119,6 +123,7 @@ Deployment reference: Streamlit's official documentation, “Prep and deploy you
 
 ```text
 app.py                 App state, draft/applied settings, sidebar and navigation
+allocation.py          Amount/weight conversion and exact-cent budget allocation
 workflow.py            Current step and independent completion checks
 experiments.py         Save, restore, compare, import/export and removal workflows
 ui.py / charts.py      English presentation and Plotly charts
